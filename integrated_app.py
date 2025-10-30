@@ -1,259 +1,254 @@
 """
-AI Data Analysis Agent - Streamlit Cloud Compatible Version
+AI Data Analysis Agent - Minimal Working Version
+This version has all functionality in ONE file to avoid import issues
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.metrics import accuracy_score, f1_score, r2_score, mean_squared_error, mean_absolute_error
+import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import datetime
-import gc
+import io
+import warnings
+warnings.filterwarnings('ignore')
 
-# Set page config FIRST
+# Page config
 st.set_page_config(
-    page_title="AI Data Analysis Agent v2.0",
+    page_title="AI Data Analysis Agent",
     page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Try to import custom modules with better error handling
-try:
-    from analysis_engine import EnhancedAIAnalysisEngine
-    ANALYSIS_ENGINE_AVAILABLE = True
-except ImportError as e:
-    st.error(f"⚠️ Analysis engine not available: {str(e)}")
-    ANALYSIS_ENGINE_AVAILABLE = False
-
-try:
-    from visualization_module import EnhancedVisualizationEngine
-    VIZ_ENGINE_AVAILABLE = True
-except ImportError as e:
-    st.error(f"⚠️ Visualization module not available: {str(e)}")
-    VIZ_ENGINE_AVAILABLE = False
-
-try:
-    from report_generator import EnhancedReportGenerator
-    REPORT_GEN_AVAILABLE = True
-except ImportError as e:
-    st.error(f"⚠️ Report generator not available: {str(e)}")
-    REPORT_GEN_AVAILABLE = False
-
-try:
-    from utils_module import DataValidator, ModelPersistence
-    UTILS_AVAILABLE = True
-except ImportError as e:
-    st.error(f"⚠️ Utils module not available: {str(e)}")
-    UTILS_AVAILABLE = False
-
-# Custom CSS
+# CSS
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         font-weight: bold;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-    }
-    .stat-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        color: #667eea;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
+# Session state
 if 'analyzed' not in st.session_state:
     st.session_state.analyzed = False
 if 'results' not in st.session_state:
     st.session_state.results = None
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'research_questions' not in st.session_state:
-    st.session_state.research_questions = []
 
-def load_dataset(uploaded_file):
-    """Load dataset with error handling"""
-    try:
-        file_extension = uploaded_file.name.split('.')[-1].lower()
-        file_size = uploaded_file.size / (1024 * 1024)  # MB
+# Simple Analysis Class
+class SimpleAnalyzer:
+    def __init__(self, df):
+        self.df = df
+        self.target = None
+        self.task_type = None
         
-        st.info(f"📦 Loading: {uploaded_file.name} ({file_size:.1f} MB)")
+    def detect_target(self):
+        """Detect target column"""
+        # Look for common patterns
+        patterns = ['target', 'label', 'approved', 'churn', 'price', 'revenue', 'class']
+        for col in self.df.columns:
+            if any(p in col.lower() for p in patterns):
+                self.target = col
+                return col
+        # Use last column
+        self.target = self.df.columns[-1]
+        return self.target
+    
+    def identify_task(self):
+        """Identify task type"""
+        if self.target is None:
+            self.detect_target()
         
-        if file_extension == 'csv':
-            df = pd.read_csv(uploaded_file, low_memory=False)
-        elif file_extension in ['xlsx', 'xls']:
-            df = pd.read_excel(uploaded_file)
+        unique = self.df[self.target].nunique()
+        if unique < 20:
+            self.task_type = 'classification'
         else:
-            st.error(f"❌ Unsupported format: {file_extension}")
-            return None
+            self.task_type = 'regression'
+        return self.task_type
+    
+    def generate_questions(self):
+        """Generate research questions"""
+        questions = []
         
-        st.success(f"✅ Loaded {len(df):,} rows × {len(df.columns)} columns")
-        return df
+        # Find potential targets
+        numeric_cols = self.df.select_dtypes(include=['number']).columns.tolist()
+        
+        for col in self.df.columns[:5]:
+            unique = self.df[col].nunique()
+            if unique < 20 and unique > 1:
+                questions.append({
+                    'question': f"Can we predict {col}?",
+                    'target': col,
+                    'type': 'classification'
+                })
+        
+        for col in numeric_cols[:3]:
+            if self.df[col].nunique() > 20:
+                questions.append({
+                    'question': f"What factors influence {col}?",
+                    'target': col,
+                    'type': 'regression'
+                })
+        
+        return questions[:5]
     
-    except Exception as e:
-        st.error(f"❌ Error loading file: {str(e)}")
-        return None
+    def train_models(self, test_size=0.2):
+        """Train models"""
+        self.identify_task()
+        
+        # Prepare data
+        X = self.df.drop(columns=[self.target])
+        y = self.df[self.target]
+        
+        # Handle missing
+        X = X.fillna(X.median(numeric_only=True))
+        X = X.fillna(X.mode().iloc[0])
+        
+        # Encode categorical
+        for col in X.select_dtypes(include=['object']).columns:
+            X[col] = LabelEncoder().fit_transform(X[col].astype(str))
+        
+        # Encode target if needed
+        if y.dtype == 'object':
+            y = LabelEncoder().fit_transform(y)
+        
+        # Scale
+        scaler = StandardScaler()
+        X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+        
+        # Split
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+        
+        results = {}
+        
+        if self.task_type == 'classification':
+            models = {
+                'Logistic Regression': LogisticRegression(max_iter=1000),
+                'Random Forest': RandomForestClassifier(n_estimators=100),
+                'Gradient Boosting': GradientBoostingClassifier(n_estimators=100)
+            }
+            
+            for name, model in models.items():
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                
+                results[name] = {
+                    'Accuracy': round(accuracy_score(y_test, y_pred), 4),
+                    'F1 Score': round(f1_score(y_test, y_pred, average='weighted'), 4)
+                }
+        else:
+            models = {
+                'Linear Regression': LinearRegression(),
+                'Random Forest': RandomForestRegressor(n_estimators=100),
+                'Gradient Boosting': GradientBoostingRegressor(n_estimators=100)
+            }
+            
+            for name, model in models.items():
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                
+                results[name] = {
+                    'R² Score': round(r2_score(y_test, y_pred), 4),
+                    'RMSE': round(np.sqrt(mean_squared_error(y_test, y_pred)), 4),
+                    'MAE': round(mean_absolute_error(y_test, y_pred), 4)
+                }
+        
+        # Get best model
+        if self.task_type == 'classification':
+            best = max(results.items(), key=lambda x: x[1]['Accuracy'])[0]
+        else:
+            best = max(results.items(), key=lambda x: x[1]['R² Score'])[0]
+        
+        return {
+            'target': self.target,
+            'task_type': self.task_type,
+            'results': results,
+            'best_model': best
+        }
 
+# Main app
 def main():
-    """Main application"""
-    
-    # Check if modules are available
-    if not ANALYSIS_ENGINE_AVAILABLE:
-        st.error("❌ Analysis engine module is missing. Please check your repository files.")
-        st.stop()
-    
-    # Header
-    st.markdown('<p class="main-header">🤖 AI Data Analysis Agent v2.0</p>', unsafe_allow_html=True)
-    st.markdown("**Upload → Auto-Analyze → Download**")
+    st.markdown('<p class="main-header">🤖 AI Data Analysis Agent</p>', unsafe_allow_html=True)
+    st.markdown("**Upload → Analyze → Results**")
     st.divider()
     
     # Sidebar
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        st.subheader("🎯 Analysis Settings")
-        test_size = st.slider("Test Set Size", 0.1, 0.4, 0.2, 0.05)
-        cv_folds = st.slider("Cross-Validation Folds", 3, 10, 5)
-        
-        st.divider()
-        
-        st.subheader("ℹ️ About")
-        st.info("""
-        **Features:**
-        - 🎯 Smart research questions
-        - 📊 15+ visualizations
-        - 📈 12+ ML models
-        - 📄 Detailed reports
-        - 💾 Up to 1GB files
-        """)
+        st.header("⚙️ Settings")
+        test_size = st.slider("Test Size", 0.1, 0.4, 0.2)
+        st.info("**Features:**\n- Auto target detection\n- 6 ML models\n- Smart insights")
     
-    # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📁 Upload & Questions",
-        "📊 Statistics",
-        "🎯 Results",
-        "⬇️ Download"
-    ])
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["📁 Upload", "🎯 Results", "📊 Statistics"])
     
     with tab1:
-        st.header("Step 1: Upload Dataset")
+        st.header("Upload Dataset")
         
-        uploaded_file = st.file_uploader(
-            "Choose CSV or Excel file",
-            type=['csv', 'xlsx', 'xls'],
-            help="Supports files up to 1GB"
-        )
+        uploaded = st.file_uploader("Choose CSV or Excel", type=['csv', 'xlsx'])
         
-        if uploaded_file:
-            df = load_dataset(uploaded_file)
-            
-            if df is not None:
-                st.session_state.df = df
+        if uploaded:
+            try:
+                # Load
+                if uploaded.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded)
+                else:
+                    df = pd.read_excel(uploaded)
+                
+                st.success(f"✅ Loaded {len(df):,} rows × {len(df.columns)} columns")
                 
                 # Preview
                 st.subheader("Preview")
-                st.dataframe(df.head(20), use_container_width=True)
+                st.dataframe(df.head(10))
                 
                 # Info
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Rows", f"{len(df):,}")
                 with col2:
-                    st.metric("Columns", f"{len(df.columns):,}")
+                    st.metric("Columns", len(df.columns))
                 with col3:
                     missing = (df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100
                     st.metric("Missing %", f"{missing:.1f}%")
-                with col4:
-                    mem = df.memory_usage(deep=True).sum() / (1024**2)
-                    st.metric("Memory", f"{mem:.1f} MB")
                 
                 st.divider()
                 
-                # Generate questions
-                st.header("Step 2: Research Questions")
+                # Questions
+                st.header("Research Questions")
+                analyzer = SimpleAnalyzer(df)
+                questions = analyzer.generate_questions()
                 
-                if st.button("🎯 Generate Questions", type="primary", use_container_width=True):
-                    with st.spinner("Analyzing dataset..."):
-                        try:
-                            engine = EnhancedAIAnalysisEngine(df)
-                            questions = engine.generate_research_questions()
-                            st.session_state.research_questions = questions
-                            st.success(f"✅ Generated {len(questions)} questions!")
-                        except Exception as e:
-                            st.error(f"❌ Error: {str(e)}")
+                if questions:
+                    options = [f"Q{i+1}: {q['question']}" for i, q in enumerate(questions)]
+                    selected = st.radio("Select question:", options)
+                    idx = options.index(selected) if selected else 0
+                    
+                    st.info(f"**Target:** {questions[idx]['target']}")
+                    
+                    if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
+                        with st.spinner("Analyzing..."):
+                            # Set target
+                            analyzer.target = questions[idx]['target']
+                            results = analyzer.train_models(test_size)
+                            st.session_state.results = results
+                            st.session_state.analyzed = True
+                            st.success("✅ Analysis complete!")
+                            st.balloons()
                 
-                # Display questions
-                if st.session_state.research_questions:
-                    st.subheader("📝 AI-Generated Questions")
-                    
-                    options = [f"Q{i+1}: {q['question']}" 
-                              for i, q in enumerate(st.session_state.research_questions)]
-                    
-                    selected = st.radio("Choose question:", options, key="q_selector")
-                    selected_idx = options.index(selected) if selected else 0
-                    
-                    if selected:
-                        q = st.session_state.research_questions[selected_idx]
-                        with st.expander("Details", expanded=True):
-                            st.write(f"**Type:** {q['type']}")
-                            st.write(f"**Target:** {q['target']}")
-                            st.write(f"**Rationale:** {q['rationale']}")
-                    
-                    st.divider()
-                    
-                    if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
-                        run_analysis(df, selected_idx, test_size, cv_folds)
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
         else:
             st.info("👆 Upload a dataset to begin")
     
     with tab2:
-        st.header("📊 Statistics")
-        
-        if st.session_state.analyzed and st.session_state.results:
-            results = st.session_state.results
-            
-            if 'descriptive_stats' in results:
-                stats = results['descriptive_stats']
-                
-                if 'overview' in stats:
-                    st.subheader("Overview")
-                    overview = stats['overview']
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Rows", f"{overview.get('total_rows', 0):,}")
-                    with col2:
-                        st.metric("Columns", f"{overview.get('total_columns', 0):,}")
-                    with col3:
-                        st.metric("Missing %", f"{overview.get('missing_percentage', 0):.2f}%")
-                
-                if 'numeric_summary' in stats and stats['numeric_summary']:
-                    st.subheader("Numeric Features")
-                    
-                    data = []
-                    for feat, s in list(stats['numeric_summary'].items())[:10]:
-                        data.append({
-                            'Feature': feat,
-                            'Mean': f"{s.get('mean', 0):.2f}",
-                            'Median': f"{s.get('median', 0):.2f}",
-                            'Std': f"{s.get('std', 0):.2f}",
-                            'Min': f"{s.get('min', 0):.2f}",
-                            'Max': f"{s.get('max', 0):.2f}"
-                        })
-                    
-                    st.dataframe(pd.DataFrame(data), use_container_width=True)
-        else:
-            st.info("Run analysis first")
-    
-    with tab3:
-        st.header("🎯 Results")
+        st.header("Analysis Results")
         
         if st.session_state.analyzed and st.session_state.results:
             results = st.session_state.results
@@ -261,145 +256,35 @@ def main():
             # Task info
             col1, col2 = st.columns(2)
             with col1:
-                st.info(f"**Task:** {results.get('task_type', 'N/A').title()}")
+                st.info(f"**Task Type:** {results['task_type'].title()}")
             with col2:
-                st.info(f"**Target:** {results.get('target_column', 'N/A')}")
+                st.info(f"**Target:** {results['target']}")
             
-            # Models
-            if 'model_results' in results:
-                st.subheader("Model Performance")
-                model_df = pd.DataFrame(results['model_results']).T
-                st.dataframe(model_df.style.highlight_max(axis=0, color='lightgreen'), 
-                           use_container_width=True)
-                
-                st.success(f"🏆 Best: {results.get('best_model', 'N/A')}")
+            # Model results
+            st.subheader("Model Performance")
+            df_results = pd.DataFrame(results['results']).T
+            st.dataframe(df_results.style.highlight_max(axis=0, color='lightgreen'), 
+                        use_container_width=True)
             
-            # Feature importance
-            if 'feature_importance' in results and results['feature_importance'] is not None:
-                st.subheader("Feature Importance")
-                st.dataframe(results['feature_importance'].head(10), 
-                           use_container_width=True)
+            st.success(f"🏆 Best Model: **{results['best_model']}**")
             
-            # Insights
-            if 'insights' in results:
-                st.subheader("Key Insights")
-                for insight in results['insights']:
-                    st.markdown(f"- {insight}")
+            # Best model metrics
+            st.subheader("Best Model Metrics")
+            best_metrics = results['results'][results['best_model']]
+            cols = st.columns(len(best_metrics))
+            for i, (metric, value) in enumerate(best_metrics.items()):
+                cols[i].metric(metric, f"{value:.4f}")
         else:
-            st.info("Run analysis first")
+            st.info("👈 Run analysis first")
     
-    with tab4:
-        st.header("⬇️ Downloads")
+    with tab3:
+        st.header("Dataset Statistics")
         
         if st.session_state.analyzed and st.session_state.results:
-            st.success("✅ Analysis complete!")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if 'report_bytes' in st.session_state.results:
-                    st.download_button(
-                        "📄 Report (DOCX)",
-                        st.session_state.results['report_bytes'],
-                        f"report_{datetime.now().strftime('%Y%m%d')}.docx",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
-            
-            with col2:
-                if 'model_bytes' in st.session_state.results:
-                    st.download_button(
-                        "💾 Model (PKL)",
-                        st.session_state.results['model_bytes'],
-                        f"model_{datetime.now().strftime('%Y%m%d')}.pkl",
-                        "application/octet-stream",
-                        use_container_width=True
-                    )
-            
-            with col3:
-                if 'model_results' in st.session_state.results:
-                    csv = pd.DataFrame(st.session_state.results['model_results']).T.to_csv()
-                    st.download_button(
-                        "📊 Metrics (CSV)",
-                        csv,
-                        f"metrics_{datetime.now().strftime('%Y%m%d')}.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
+            # Would show detailed stats here
+            st.write("Statistics will appear here after analysis")
         else:
-            st.info("Run analysis first")
-
-def run_analysis(df, selected_idx, test_size, cv_folds):
-    """Run analysis pipeline"""
-    progress = st.progress(0)
-    status = st.empty()
-    
-    try:
-        status.text("🔧 Initializing...")
-        progress.progress(10)
-        
-        engine = EnhancedAIAnalysisEngine(df, "")
-        
-        status.text("📊 Calculating statistics...")
-        progress.progress(20)
-        engine.perform_descriptive_statistics()
-        
-        status.text("🧹 Cleaning data...")
-        progress.progress(30)
-        engine.perform_data_wrangling()
-        
-        status.text("🤖 Training models...")
-        progress.progress(50)
-        
-        results = engine.run_full_pipeline(
-            selected_question_idx=selected_idx,
-            test_size=test_size,
-            cv_folds=cv_folds
-        )
-        
-        if VIZ_ENGINE_AVAILABLE:
-            status.text("📊 Creating visualizations...")
-            progress.progress(70)
-            viz = EnhancedVisualizationEngine()
-            results['eda_plots'] = viz.generate_all_eda_plots(df)
-        
-        if REPORT_GEN_AVAILABLE:
-            status.text("📄 Generating report...")
-            progress.progress(85)
-            
-            q = st.session_state.research_questions[selected_idx]
-            report_gen = EnhancedReportGenerator()
-            results['report_bytes'] = report_gen.generate_full_report(
-                research_question=q['question'],
-                task_type=results['task_type'],
-                target_col=results['target_column'],
-                model_results=results['model_results'],
-                feature_importance=results.get('feature_importance'),
-                insights=results['insights'],
-                descriptive_stats=results.get('descriptive_stats')
-            )
-        
-        if UTILS_AVAILABLE:
-            status.text("💾 Saving model...")
-            progress.progress(95)
-            persist = ModelPersistence()
-            results['model_bytes'] = persist.serialize_model(results['best_model_object'])
-        
-        progress.progress(100)
-        status.text("✅ Complete!")
-        
-        st.session_state.analyzed = True
-        st.session_state.results = results
-        
-        gc.collect()
-        st.balloons()
-        st.success("🎉 Analysis complete! Check other tabs.")
-        
-    except Exception as e:
-        st.error(f"❌ Analysis failed: {str(e)}")
-        st.exception(e)
-        progress.empty()
-        status.empty()
+            st.info("👈 Run analysis first")
 
 if __name__ == "__main__":
     main()
